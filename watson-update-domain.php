@@ -206,7 +206,7 @@ function replace_domain_page() {
                 ?>
                 </tbody>
             </table>
-            <?php submit_button('Clear Error Log', 'secondary', 'clear_log_button'); ?>
+            <?php submit_button('Clear Log', 'secondary', 'clear_log_button'); ?>
         </form>
     </div>
     <?php
