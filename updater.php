@@ -7,80 +7,57 @@ Author: Spencer Thayer
 License: GPL2
 */
 
+// Include necessary WordPress files
+require_once(ABSPATH . 'wp-admin/includes/plugin.php');
+require_once(ABSPATH . 'wp-includes/formatting.php');
+
 // Configuration Variables
 $config = array(
-    // 'slug' is the slug of your plugin, which is typically the name of the main plugin file.
-    // This is used to identify your plugin in WordPress and should match the plugin slug in your GitHub repository.
     'slug' => plugin_basename(__FILE__),
-
-    // 'proper_folder_name' is the name of the folder that contains your plugin files.
-    // This is used to ensure that the plugin is installed in the correct directory.
     'proper_folder_name' => dirname(plugin_basename(__FILE__)),
-
-    // 'api_url' is the URL of the GitHub API endpoint for your plugin repository.
-    // Replace 'your-username' with your GitHub username and 'your-plugin' with the name of your plugin repository.
     'api_url' => 'https://api.github.com/repos/Watson-Creative/wc-update-domain',
-
-    // 'raw_url' is the URL of the raw content of your plugin repository on GitHub.
-    // Replace 'your-username' with your GitHub username, 'your-plugin' with the name of your plugin repository,
-    // and 'master' with the branch name where your plugin files are located (e.g., 'main' or 'develop').
     'raw_url' => 'https://raw.github.com/Watson-Creative/wc-update-domain/master',
-
-    // 'github_url' is the URL of your plugin repository on GitHub.
-    // Replace 'your-username' with your GitHub username and 'your-plugin' with the name of your plugin repository.
     'github_url' => 'https://github.com/Watson-Creative/wc-update-domain',
-
-    // 'zip_url' is the URL of the ZIP archive of your plugin repository on GitHub.
-    // Replace 'your-username' with your GitHub username, 'your-plugin' with the name of your plugin repository,
-    // and 'master' with the branch name where your plugin files are located (e.g., 'main' or 'develop').
     'zip_url' => 'https://github.com/Watson-Creative/wc-update-domain/archive/master.zip',
-
-    // 'sslverify' is a boolean value that determines whether SSL verification should be performed when making requests to GitHub.
-    // Set this to 'true' to enable SSL verification, or 'false' to disable it.
     'sslverify' => true,
-
-    // 'requires' is the minimum version of WordPress required for your plugin to work properly.
-    // Set this to the minimum WordPress version that your plugin is compatible with (e.g., '4.0' or '5.0').
     'requires' => '6.3',
-
-    // 'tested' is the latest version of WordPress that your plugin has been tested with.
-    // Set this to the most recent WordPress version that you have tested your plugin with (e.g., '5.4' or '5.7').
     'tested' => '6.4.3',
-
-    // 'access_token' is an optional GitHub personal access token that is used to authenticate requests to the GitHub API.
-    // If your plugin repository is private, you'll need to provide an access token with the necessary permissions.
-    // Leave this empty if your repository is public or if you don't want to use an access token.
     'access_token' => '',
+    'plugin_name' => 'GitHub Plugin Updater',
+    'author' => 'Spencer Thayer',
+    'author_profile' => 'https://github.com/Watson-Creative',
+    'homepage' => 'https://github.com/Watson-Creative/wc-update-domain',
 );
+
 // Updater Class
 class WP_GitHub_Updater {
 
     protected $config;
+    private $github_response;
 
     public function __construct($config = array()) {
-	
-		$this->config = wp_parse_args($config, $defaults);
-	
-		add_filter('pre_set_site_transient_update_plugins', array($this, 'modify_transient'), 10, 1);
-		add_filter('plugins_api', array($this, 'plugin_popup'), 10, 3);
-		add_filter('upgrader_post_install', array($this, 'after_install'), 10, 3);
-	}
+        $this->config = $config;
+
+        add_filter('pre_set_site_transient_update_plugins', array($this, 'modify_transient'), 10, 1);
+        add_filter('plugins_api', array($this, 'plugin_popup'), 10, 3);
+        add_filter('upgrader_post_install', array($this, 'after_install'), 10, 3);
+    }
 
     public function modify_transient($transient) {
         if (property_exists($transient, 'checked')) {
             if ($checked = $transient->checked) {
                 $this->get_repository_info();
-                $out_of_date = version_compare($this->github_response['tag_name'], $checked[$this->config['slug']], 'gt');
+                $slug = current(explode('/', $this->config['slug']));
+                $out_of_date = version_compare($this->github_response['tag_name'], $checked[$slug], 'gt');
                 if ($out_of_date) {
                     $new_files = $this->github_response['zipball_url'];
-                    $slug = current(explode('/', $this->config['slug']));
                     $plugin = array(
                         'url' => $this->config['github_url'],
                         'slug' => $slug,
                         'package' => $new_files,
                         'new_version' => $this->github_response['tag_name']
                     );
-                    $transient->response[$this->config['slug']] = (object) $plugin;
+                    $transient->response[$slug] = (object) $plugin;
                 }
             }
         }
@@ -89,7 +66,8 @@ class WP_GitHub_Updater {
 
     public function plugin_popup($result, $action, $args) {
         if (!empty($args->slug)) {
-            if ($args->slug == current(explode('/' , $this->config['slug']))) {
+            $slug = current(explode('/' , $this->config['slug']));
+            if ($args->slug == $slug) {
                 $this->get_repository_info();
                 $plugin = array(
                     'name' => $this->config['plugin_name'],
@@ -116,18 +94,38 @@ class WP_GitHub_Updater {
 
     public function get_repository_info() {
         if (is_null($this->github_response)) {
-            $request_uri = sprintf('https://api.github.com/repos/%s/%s/releases', $this->config['username'], $this->config['repository']);
-            if ($this->config['access_token']) {
-                $request_uri = add_query_arg(array('access_token' => $this->config['access_token']), $request_uri);
+            $transient_key = 'github_updater_' . md5($this->config['slug']);
+            $cached_response = get_transient($transient_key);
+
+            if ($cached_response !== false) {
+                $this->github_response = $cached_response;
+                return;
             }
-            $response = json_decode(wp_remote_retrieve_body(wp_remote_get($request_uri)), true);
-            if (is_array($response)) {
-                $response = current($response);
+
+            $request_uri = sprintf('%s/repos/%s/releases/latest', $this->config['api_url'], $this->config['proper_folder_name']);
+
+            $args = array(
+                'headers' => array(
+                    'Authorization' => 'Bearer ' . $this->config['access_token'],
+                ),
+                'sslverify' => $this->config['sslverify'],
+            );
+
+            $response = wp_remote_get($request_uri, $args);
+
+            if (is_wp_error($response) || wp_remote_retrieve_response_code($response) != 200) {
+                $error_message = is_wp_error($response) ? $response->get_error_message() : 'Invalid response from GitHub API';
+                wp_die($error_message, 'GitHub Plugin Updater Error', array('response' => 500));
             }
+
+            $response_body = json_decode(wp_remote_retrieve_body($response), true);
+
             if ($this->config['zip_url']) {
-                $response['zipball_url'] = $this->config['zip_url'];
+                $response_body['zipball_url'] = $this->config['zip_url'];
             }
-            $this->github_response = $response;
+
+            $this->github_response = $response_body;
+            set_transient($transient_key, $this->github_response, 12 * HOUR_IN_SECONDS);
         }
     }
 
@@ -136,9 +134,6 @@ class WP_GitHub_Updater {
         $install_directory = plugin_dir_path($this->config['slug']);
         $wp_filesystem->move($result['destination'], $install_directory);
         $result['destination'] = $install_directory;
-        if ($this->active) {
-            activate_plugin($this->config['slug']);
-        }
         return $result;
     }
 }
