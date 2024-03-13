@@ -9,6 +9,33 @@
 
 defined( 'ABSPATH' ) or die( 'No script kiddies please!' );
 
+function replace_domain_in_content($content) {
+    global $wpdb;
+
+    $project_name = getenv('PANTHEON_SITE_NAME');
+    $domain = $_SERVER['HTTP_HOST'];
+    $domain_name = get_option('my_domain_name');
+
+    $domain_env = [
+        "{$project_name}.lndo.site" => $domain,
+        "dev-{$project_name}.pantheonsite.io" => $domain,
+        "test-{$project_name}.pantheonsite.io" => $domain,
+        "live-{$project_name}.pantheonsite.io" => $domain,
+        "{$domain_name}" => $domain
+    ];
+
+    foreach($domain_env as $src => $tgt) {
+        if ($domain === $src) {
+            continue;
+        }
+
+        $content = str_replace($src, $tgt, $content);
+    }
+
+    return $content;
+}
+add_filter('the_content', 'replace_domain_in_content');
+
 function wt_domain_table_install() {
     global $wpdb;
     $table_name = $wpdb->prefix . 'wt_domain';
